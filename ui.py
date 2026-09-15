@@ -11,7 +11,7 @@ def get_execution_history():
     cursor = connection.cursor()
 
     cursor.execute("""
-        SELECT step, line_number, variable_name, value
+        SELECT step, line_number, variable_name, value, event_type
         FROM execution_states
         ORDER BY step
     """)
@@ -29,12 +29,18 @@ def get_state_at_step(step_number):
 
     state = {}
 
-    for step, line_number, variable_name, value in rows:
+    for step, line_number, variable_name, value, event_type in rows:
 
-        if step <= step_number:
+        if step <= step_number and event_type == "change":
             state[variable_name] = value
 
     return state
+
+
+def read_source_code():
+
+    with open("examples/loop.py", "r") as file:
+        return file.readlines()
 
 
 class PyChronicleApp(App):
@@ -85,32 +91,55 @@ class PyChronicleApp(App):
 
             with Vertical(id="code"):
                 yield Static("CODE VIEW")
-                yield Static("")
-                yield Static("1  total = 0")
-                yield Static("2")
-                yield Static("3  for i in range(1, 4):")
-                yield Static("4      total = total + i")
-                yield Static("5")
-                yield Static("6  print(total)")
+                yield Static("", id="code_content")
 
             with Vertical(id="variables"):
                 yield Static("VARIABLES")
-                yield Static("")
-                yield Static(
-                    "",
-                    id="variable_state"
-                )
+                yield Static("", id="variable_state")
 
-        yield Static(
-            "",
-            id="timeline"
-        )
+        yield Static("", id="timeline")
 
         yield Footer()
 
     def on_mount(self):
 
+        self.update_code()
         self.update_display()
+
+    def update_code(self):
+
+        lines = read_source_code()
+
+        history = get_execution_history()
+
+        current_line = None
+
+        # Find the actual line executed at the current step
+        for step, line_number, variable_name, value, event_type in history:
+
+            if step == self.current_step:
+                current_line = line_number
+                break
+
+        code_text = ""
+
+        for number, line in enumerate(lines, start=1):
+
+            if number == current_line:
+
+                code_text += (
+                    f"▶ {number:>2}  {line}"
+                )
+
+            else:
+
+                code_text += (
+                    f"  {number:>2}  {line}"
+                )
+
+        self.query_one("#code_content", Static).update(
+            code_text
+        )
 
     def update_display(self):
 
@@ -126,27 +155,41 @@ class PyChronicleApp(App):
         )
 
         for variable, value in state.items():
-            variables_text += f"{variable} = {value}\n"
 
-        self.query_one("#variable_state", Static).update(
-            variables_text
-        )
+            variables_text += (
+                f"{variable} = {value}\n"
+            )
+
+        self.query_one(
+            "#variable_state",
+            Static
+        ).update(variables_text)
 
         timeline = ""
 
-        for step, _, _, _ in history:
+        for step, _, _, _, _ in history:
 
             if step == self.current_step:
+
                 timeline += f"[{step}]"
+
             else:
+
                 timeline += str(step)
 
             if step != history[-1][0]:
+
                 timeline += " ─── "
 
-        self.query_one("#timeline", Static).update(
+        self.query_one(
+            "#timeline",
+            Static
+        ).update(
             "TIMELINE\n\n" + timeline
         )
+
+        # Update highlighted code line
+        self.update_code()
 
     def action_previous_step(self):
 
@@ -168,4 +211,5 @@ class PyChronicleApp(App):
 
 
 if __name__ == "__main__":
+
     PyChronicleApp().run()

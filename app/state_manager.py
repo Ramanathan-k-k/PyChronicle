@@ -10,6 +10,7 @@ def get_state_at_step(step_number):
         SELECT variable_name, value
         FROM execution_states
         WHERE step <= ?
+        AND event_type = 'change'
         ORDER BY step
     """, (step_number,))
 
