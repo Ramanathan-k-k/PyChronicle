@@ -3,7 +3,8 @@ import sys
 from app.tracer import trace_function, close_database, set_target_file
 
 
-file_path = "examples/sample.py"
+# Get Python file from terminal
+file_path = sys.argv[1]
 
 set_target_file(file_path)
 
