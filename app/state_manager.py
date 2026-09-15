@@ -1,18 +1,50 @@
 import sqlite3
 
 
-def get_state_at_step(step_number):
+DATABASE_PATH = "data/pychronicle.db"
 
-    connection = sqlite3.connect("data/pychronicle.db")
+
+def get_latest_run_id():
+
+    connection = sqlite3.connect(DATABASE_PATH)
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT run_id
+        FROM runs
+        ORDER BY run_id DESC
+        LIMIT 1
+    """)
+
+    result = cursor.fetchone()
+
+    connection.close()
+
+    if result:
+        return result[0]
+
+    return None
+
+
+def get_state_at_step(step_number, run_id=None):
+
+    if run_id is None:
+        run_id = get_latest_run_id()
+
+    if run_id is None:
+        return {}
+
+    connection = sqlite3.connect(DATABASE_PATH)
     cursor = connection.cursor()
 
     cursor.execute("""
         SELECT variable_name, value
         FROM execution_states
-        WHERE step <= ?
+        WHERE run_id = ?
+        AND step <= ?
         AND event_type = 'change'
         ORDER BY step
-    """, (step_number,))
+    """, (run_id, step_number))
 
     rows = cursor.fetchall()
 

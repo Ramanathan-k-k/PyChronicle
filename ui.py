@@ -5,16 +5,37 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Header, Footer, Static
 
 
-def get_execution_history():
+DATABASE_PATH = "data/pychronicle.db"
 
-    connection = sqlite3.connect("data/pychronicle.db")
+
+def get_latest_run():
+    connection = sqlite3.connect(DATABASE_PATH)
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT run_id, file_path
+        FROM runs
+        ORDER BY run_id DESC
+        LIMIT 1
+    """)
+
+    result = cursor.fetchone()
+
+    connection.close()
+
+    return result
+
+
+def get_execution_history(run_id):
+    connection = sqlite3.connect(DATABASE_PATH)
     cursor = connection.cursor()
 
     cursor.execute("""
         SELECT step, line_number, variable_name, value, event_type
         FROM execution_states
+        WHERE run_id = ?
         ORDER BY step
-    """)
+    """, (run_id,))
 
     rows = cursor.fetchall()
 
@@ -23,9 +44,9 @@ def get_execution_history():
     return rows
 
 
-def get_state_at_step(step_number):
+def get_state_at_step(run_id, step_number):
 
-    rows = get_execution_history()
+    rows = get_execution_history(run_id)
 
     state = {}
 
@@ -37,9 +58,9 @@ def get_state_at_step(step_number):
     return state
 
 
-def read_source_code():
+def read_source_code(file_path):
 
-    with open("examples/loop.py", "r") as file:
+    with open(file_path, "r") as file:
         return file.readlines()
 
 
@@ -67,7 +88,7 @@ class PyChronicleApp(App):
     }
 
     #timeline {
-        height: 8;
+        height: 10;
         border: solid yellow;
         padding: 1;
     }
@@ -76,49 +97,83 @@ class PyChronicleApp(App):
     BINDINGS = [
         ("left", "previous_step", "Previous"),
         ("right", "next_step", "Next"),
-        ("q", "quit", "Quit"),
+        ("q", "quit_app", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
 
-        history = get_execution_history()
+        run = get_latest_run()
 
-        self.current_step = history[-1][0]
+        if run is None:
+
+            self.run_id = None
+            self.file_path = None
+            self.current_step = 0
+
+        else:
+
+            self.run_id = run[0]
+            self.file_path = run[1]
+
+            history = get_execution_history(self.run_id)
+
+            if history:
+                self.current_step = history[-1][0]
+            else:
+                self.current_step = 0
 
         yield Header(show_clock=True)
 
         with Horizontal(id="main"):
 
             with Vertical(id="code"):
+
                 yield Static("CODE VIEW")
-                yield Static("", id="code_content")
+
+                yield Static(
+                    "",
+                    id="code_content"
+                )
 
             with Vertical(id="variables"):
-                yield Static("VARIABLES")
-                yield Static("", id="variable_state")
 
-        yield Static("", id="timeline")
+                yield Static("VARIABLES")
+
+                yield Static(
+                    "",
+                    id="variable_state"
+                )
+
+        yield Static(
+            "",
+            id="timeline"
+        )
 
         yield Footer()
 
     def on_mount(self):
 
+        if self.run_id is None:
+            return
+
         self.update_code()
+
         self.update_display()
 
     def update_code(self):
 
-        lines = read_source_code()
+        lines = read_source_code(self.file_path)
 
-        history = get_execution_history()
+        history = get_execution_history(self.run_id)
 
         current_line = None
 
-        # Find the actual line executed at the current step
         for step, line_number, variable_name, value, event_type in history:
 
             if step == self.current_step:
+
                 current_line = line_number
+
                 break
 
         code_text = ""
@@ -137,18 +192,24 @@ class PyChronicleApp(App):
                     f"  {number:>2}  {line}"
                 )
 
-        self.query_one("#code_content", Static).update(
-            code_text
-        )
+        self.query_one(
+            "#code_content",
+            Static
+        ).update(code_text)
 
     def update_display(self):
 
-        history = get_execution_history()
+        history = get_execution_history(
+            self.run_id
+        )
 
         if not history:
             return
 
-        state = get_state_at_step(self.current_step)
+        state = get_state_at_step(
+            self.run_id,
+            self.current_step
+        )
 
         variables_text = (
             f"Current Step: {self.current_step}\n\n"
@@ -165,17 +226,37 @@ class PyChronicleApp(App):
             Static
         ).update(variables_text)
 
-        timeline = ""
+        timeline = "TIMELINE\n\n"
 
-        for step, _, _, _, _ in history:
+        for (
+            step,
+            line_number,
+            variable_name,
+            value,
+            event_type
+        ) in history:
 
-            if step == self.current_step:
+            if event_type == "change":
 
-                timeline += f"[{step}]"
+                event_text = (
+                    f"{variable_name} = {value}"
+                )
 
             else:
 
-                timeline += str(step)
+                event_text = "execution"
+
+            if step == self.current_step:
+
+                timeline += (
+                    f"▶ [{step}: {event_text}]"
+                )
+
+            else:
+
+                timeline += (
+                    f"{step}: {event_text}"
+                )
 
             if step != history[-1][0]:
 
@@ -184,11 +265,8 @@ class PyChronicleApp(App):
         self.query_one(
             "#timeline",
             Static
-        ).update(
-            "TIMELINE\n\n" + timeline
-        )
+        ).update(timeline)
 
-        # Update highlighted code line
         self.update_code()
 
     def action_previous_step(self):
@@ -201,13 +279,22 @@ class PyChronicleApp(App):
 
     def action_next_step(self):
 
-        history = get_execution_history()
+        history = get_execution_history(
+            self.run_id
+        )
+
+        if not history:
+            return
 
         if self.current_step < history[-1][0]:
 
             self.current_step += 1
 
             self.update_display()
+
+    def action_quit_app(self):
+
+        self.exit()
 
 
 if __name__ == "__main__":

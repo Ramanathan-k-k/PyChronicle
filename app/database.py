@@ -1,53 +1,43 @@
 import sqlite3
 
-# 1. Create / open the database
-connection = sqlite3.connect("data/pychronicle.db")
 
-# 2. Create a cursor
-cursor = connection.cursor()
+DATABASE_PATH = "data/pychronicle.db"
 
-# 3. Create the execution_states table
-cursor.execute("""
-    CREATE TABLE IF NOT EXISTS execution_states (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        step INTEGER,
-        line_number INTEGER,
-        variable_name TEXT,
-        value TEXT
-    )
-""")
 
-# 4. Delete our previous test data
-cursor.execute("DELETE FROM execution_states")
+def get_connection():
 
-# 5. Sample execution states
-states = [
-    (1, 1, "x", "10"),
-    (2, 2, "y", "20"),
-    (3, 3, "z", "30"),
-    (4, 5, "x", "50")
-]
+    return sqlite3.connect(DATABASE_PATH)
 
-# 6. Insert all states into the database
-cursor.executemany("""
-    INSERT INTO execution_states
-    (step, line_number, variable_name, value)
-    VALUES (?, ?, ?, ?)
-""", states)
 
-# 7. Save the changes
-connection.commit()
+def create_tables():
 
-print("Data inserted successfully!")
+    connection = get_connection()
+    cursor = connection.cursor()
 
-# 8. Read the data from the database
-cursor.execute("SELECT * FROM execution_states")
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS runs (
+            run_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            file_path TEXT,
+            started_at TEXT
+        )
+    """)
 
-rows = cursor.fetchall()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS execution_states (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            run_id INTEGER,
+            step INTEGER,
+            line_number INTEGER,
+            variable_name TEXT,
+            value TEXT,
+            event_type TEXT
+        )
+    """)
 
-# 9. Display the data
-for row in rows:
-    print(row)
+    connection.commit()
+    connection.close()
 
-# 10. Close the database connection
-connection.close()
+
+if __name__ == "__main__":
+    create_tables()
+    print("Database tables created successfully.")
