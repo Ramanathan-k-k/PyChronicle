@@ -1,3 +1,4 @@
+import os
 import sqlite3
 from datetime import datetime
 
@@ -23,11 +24,14 @@ def set_target_file(file_path):
     global previous_line
     global step
 
-    target_file = file_path
+    target_file = os.path.abspath(file_path)
+
+    # Reset tracer state for a new run
     previous_variables = {}
     previous_line = None
     step = 0
 
+    # Create a new run
     cursor.execute("""
         INSERT INTO runs (file_path, started_at)
         VALUES (?, ?)
@@ -41,58 +45,37 @@ def set_target_file(file_path):
     connection.commit()
 
 
-def save_event(line_number, changes):
+def save_execution_event(line_number):
 
     global step
 
     step += 1
 
-    if changes:
+    cursor.execute("""
+        INSERT INTO execution_events
+        (run_id, step, line_number)
+        VALUES (?, ?, ?)
+    """, (
+        run_id,
+        step,
+        line_number
+    ))
 
-        for name, value in changes:
+    return step
 
-            print(
-                f"CHANGE → Step {step} → "
-                f"Line {line_number} → "
-                f"{name} = {value}"
-            )
 
-            cursor.execute("""
-                INSERT INTO execution_states
-                (run_id, step, line_number,
-                 variable_name, value, event_type)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                run_id,
-                step,
-                line_number,
-                name,
-                str(value),
-                "change"
-            ))
+def save_variable_change(step_number, name, value):
 
-    else:
-
-        print(
-            f"EXECUTE → Step {step} → "
-            f"Line {line_number}"
-        )
-
-        cursor.execute("""
-            INSERT INTO execution_states
-            (run_id, step, line_number,
-             variable_name, value, event_type)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            run_id,
-            step,
-            line_number,
-            None,
-            None,
-            "execute"
-        ))
-
-    connection.commit()
+    cursor.execute("""
+        INSERT INTO variable_changes
+        (run_id, step, variable_name, value)
+        VALUES (?, ?, ?, ?)
+    """, (
+        run_id,
+        step_number,
+        name,
+        repr(value)
+    ))
 
 
 def trace_function(frame, event, arg):
@@ -100,7 +83,7 @@ def trace_function(frame, event, arg):
     global previous_variables
     global previous_line
 
-    if frame.f_code.co_filename != target_file:
+    if os.path.abspath(frame.f_code.co_filename) != target_file:
         return trace_function
 
     if event == "line":
@@ -123,23 +106,69 @@ def trace_function(frame, event, arg):
             ):
                 changes.append((name, value))
 
-        # The changes seen now were caused by the previous line.
+        # Changes detected here were caused
+        # by the previous line.
         if previous_line is not None:
-            save_event(previous_line, changes)
+
+            current_step = save_execution_event(
+                previous_line
+            )
+
+            for name, value in changes:
+
+                save_variable_change(
+                    current_step,
+                    name,
+                    value
+                )
 
         previous_variables = current_variables.copy()
+
         previous_line = current_line
+
+        connection.commit()
 
     elif event == "return":
 
-        # Flush the final executed line.
-        if previous_line is not None:
-            save_event(previous_line, [])
+        # Capture the final state of variables.
+        current_variables = {
+            name: value
+            for name, value in frame.f_locals.items()
+            if name != "__builtins__"
+        }
 
-        previous_line = None
+        changes = []
+
+        for name, value in current_variables.items():
+
+            if (
+                name not in previous_variables
+                or previous_variables[name] != value
+            ):
+                changes.append((name, value))
+
+        # Save the final executed line.
+        if previous_line is not None:
+
+            current_step = save_execution_event(
+                previous_line
+            )
+
+            for name, value in changes:
+
+                save_variable_change(
+                    current_step,
+                    name,
+                    value
+                )
+
+            connection.commit()
+
+            previous_line = None
 
     return trace_function
 
 
 def close_database():
+
     connection.close()

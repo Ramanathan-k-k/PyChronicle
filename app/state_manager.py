@@ -39,10 +39,9 @@ def get_state_at_step(step_number, run_id=None):
 
     cursor.execute("""
         SELECT variable_name, value
-        FROM execution_states
+        FROM variable_changes
         WHERE run_id = ?
         AND step <= ?
-        AND event_type = 'change'
         ORDER BY step
     """, (run_id, step_number))
 
@@ -53,6 +52,7 @@ def get_state_at_step(step_number, run_id=None):
     state = {}
 
     for variable_name, value in rows:
+
         state[variable_name] = value
 
     return state

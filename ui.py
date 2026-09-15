@@ -9,6 +9,7 @@ DATABASE_PATH = "data/pychronicle.db"
 
 
 def get_latest_run():
+
     connection = sqlite3.connect(DATABASE_PATH)
     cursor = connection.cursor()
 
@@ -26,13 +27,33 @@ def get_latest_run():
     return result
 
 
-def get_execution_history(run_id):
+def get_execution_events(run_id):
+
     connection = sqlite3.connect(DATABASE_PATH)
     cursor = connection.cursor()
 
     cursor.execute("""
-        SELECT step, line_number, variable_name, value, event_type
-        FROM execution_states
+        SELECT step, line_number
+        FROM execution_events
+        WHERE run_id = ?
+        ORDER BY step
+    """, (run_id,))
+
+    rows = cursor.fetchall()
+
+    connection.close()
+
+    return rows
+
+
+def get_variable_changes(run_id):
+
+    connection = sqlite3.connect(DATABASE_PATH)
+    cursor = connection.cursor()
+
+    cursor.execute("""
+        SELECT step, variable_name, value
+        FROM variable_changes
         WHERE run_id = ?
         ORDER BY step
     """, (run_id,))
@@ -46,13 +67,13 @@ def get_execution_history(run_id):
 
 def get_state_at_step(run_id, step_number):
 
-    rows = get_execution_history(run_id)
+    changes = get_variable_changes(run_id)
 
     state = {}
 
-    for step, line_number, variable_name, value, event_type in rows:
+    for step, variable_name, value in changes:
 
-        if step <= step_number and event_type == "change":
+        if step <= step_number:
             state[variable_name] = value
 
     return state
@@ -88,7 +109,7 @@ class PyChronicleApp(App):
     }
 
     #timeline {
-        height: 10;
+        height: 12;
         border: solid yellow;
         padding: 1;
     }
@@ -97,12 +118,16 @@ class PyChronicleApp(App):
     BINDINGS = [
         ("left", "previous_step", "Previous"),
         ("right", "next_step", "Next"),
+        ("w", "toggle_watch", "Watch"),
         ("q", "quit_app", "Quit"),
     ]
 
     def compose(self) -> ComposeResult:
 
         run = get_latest_run()
+
+        self.watch_enabled = False
+        self.watched_variable = "result"
 
         if run is None:
 
@@ -115,10 +140,12 @@ class PyChronicleApp(App):
             self.run_id = run[0]
             self.file_path = run[1]
 
-            history = get_execution_history(self.run_id)
+            events = get_execution_events(
+                self.run_id
+            )
 
-            if history:
-                self.current_step = history[-1][0]
+            if events:
+                self.current_step = events[-1][0]
             else:
                 self.current_step = 0
 
@@ -156,29 +183,33 @@ class PyChronicleApp(App):
         if self.run_id is None:
             return
 
-        self.update_code()
-
         self.update_display()
 
     def update_code(self):
 
-        lines = read_source_code(self.file_path)
+        lines = read_source_code(
+            self.file_path
+        )
 
-        history = get_execution_history(self.run_id)
+        events = get_execution_events(
+            self.run_id
+        )
 
         current_line = None
 
-        for step, line_number, variable_name, value, event_type in history:
+        for step, line_number in events:
 
             if step == self.current_step:
 
                 current_line = line_number
-
                 break
 
         code_text = ""
 
-        for number, line in enumerate(lines, start=1):
+        for number, line in enumerate(
+            lines,
+            start=1
+        ):
 
             if number == current_line:
 
@@ -197,76 +228,143 @@ class PyChronicleApp(App):
             Static
         ).update(code_text)
 
-    def update_display(self):
-
-        history = get_execution_history(
-            self.run_id
-        )
-
-        if not history:
-            return
+    def update_variables(self):
 
         state = get_state_at_step(
             self.run_id,
             self.current_step
         )
 
-        variables_text = (
-            f"Current Step: {self.current_step}\n\n"
-        )
+        if self.watch_enabled:
 
-        for variable, value in state.items():
-
-            variables_text += (
-                f"{variable} = {value}\n"
+            variables_text = (
+                "WATCHED VARIABLE\n\n"
+                f"{self.watched_variable} = "
+                f"{state.get(self.watched_variable, 'Not defined')}"
             )
+
+        else:
+
+            variables_text = (
+                f"Current Step: "
+                f"{self.current_step}\n\n"
+            )
+
+            if state:
+
+                for variable, value in state.items():
+
+                    variables_text += (
+                        f"{variable} = {value}\n"
+                    )
+
+            else:
+
+                variables_text += "No variables yet."
 
         self.query_one(
             "#variable_state",
             Static
         ).update(variables_text)
 
-        timeline = "TIMELINE\n\n"
+    def update_timeline(self):
 
-        for (
-            step,
-            line_number,
-            variable_name,
-            value,
-            event_type
-        ) in history:
+        events = get_execution_events(
+            self.run_id
+        )
 
-            if event_type == "change":
+        source_lines = read_source_code(
+            self.file_path
+        )
+
+        changes = get_variable_changes(
+            self.run_id
+        )
+
+        changes_by_step = {}
+
+        for step, variable, value in changes:
+
+            if step not in changes_by_step:
+                changes_by_step[step] = []
+
+            changes_by_step[step].append(
+                (variable, value)
+            )
+
+        timeline_text = "TIMELINE\n\n"
+
+        for step, line_number in events:
+
+            if 1 <= line_number <= len(source_lines):
+
+                source_line = (
+                    source_lines[
+                        line_number - 1
+                    ].strip()
+                )
+
+            else:
+
+                source_line = "unknown"
+
+            if step in changes_by_step:
+
+                for variable, value in (
+                    changes_by_step[step]
+                ):
+
+                    event_text = (
+                        f"Line {line_number}: "
+                        f"{source_line} → "
+                        f"{variable} = {value}"
+                    )
+
+                    if step == self.current_step:
+                        timeline_text += (
+                            f"▶ [{step}] "
+                            f"{event_text}\n"
+                        )
+                    else:
+                        timeline_text += (
+                            f"  {step}  "
+                            f"{event_text}\n"
+                        )
+
+            else:
 
                 event_text = (
-                    f"{variable_name} = {value}"
+                    f"Line {line_number}: "
+                    f"{source_line}"
                 )
 
-            else:
-
-                event_text = "execution"
-
-            if step == self.current_step:
-
-                timeline += (
-                    f"▶ [{step}: {event_text}]"
-                )
-
-            else:
-
-                timeline += (
-                    f"{step}: {event_text}"
-                )
-
-            if step != history[-1][0]:
-
-                timeline += " ─── "
+                if step == self.current_step:
+                    timeline_text += (
+                        f"▶ [{step}] "
+                        f"{event_text}\n"
+                    )
+                else:
+                    timeline_text += (
+                        f"  {step}  "
+                        f"{event_text}\n"
+                    )
 
         self.query_one(
             "#timeline",
             Static
-        ).update(timeline)
+        ).update(timeline_text)
 
+    def update_display(self):
+
+        events = get_execution_events(
+            self.run_id
+        )
+
+        if not events:
+            return
+
+        self.update_variables()
+        self.update_timeline()
         self.update_code()
 
     def action_previous_step(self):
@@ -274,23 +372,29 @@ class PyChronicleApp(App):
         if self.current_step > 1:
 
             self.current_step -= 1
-
             self.update_display()
 
     def action_next_step(self):
 
-        history = get_execution_history(
+        events = get_execution_events(
             self.run_id
         )
 
-        if not history:
+        if not events:
             return
 
-        if self.current_step < history[-1][0]:
+        last_step = events[-1][0]
+
+        if self.current_step < last_step:
 
             self.current_step += 1
-
             self.update_display()
+
+    def action_toggle_watch(self):
+
+        self.watch_enabled = not self.watch_enabled
+
+        self.update_display()
 
     def action_quit_app(self):
 
