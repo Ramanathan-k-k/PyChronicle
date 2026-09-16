@@ -2,7 +2,8 @@ import sqlite3
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Header, Footer, Static
+from textual.screen import ModalScreen
+from textual.widgets import Header, Footer, Static, Input, Button
 
 
 DATABASE_PATH = "data/pychronicle.db"
@@ -85,6 +86,109 @@ def read_source_code(file_path):
         return file.readlines()
 
 
+# -------------------------------------------------
+# WATCH VARIABLE MODAL
+# -------------------------------------------------
+
+class WatchVariableModal(ModalScreen):
+
+    CSS = """
+    WatchVariableModal {
+        align: center middle;
+    }
+
+    #dialog {
+        width: 50;
+        height: auto;
+        border: solid cyan;
+        padding: 2;
+        background: $surface;
+    }
+
+    #title {
+        margin-bottom: 1;
+    }
+
+    #watch_name {
+        margin-bottom: 1;
+    }
+
+    #buttons {
+        height: 3;
+        align: right middle;
+    }
+
+    Button {
+        margin-left: 1;
+    }
+    """
+
+    def __init__(self, current_variable):
+
+        super().__init__()
+
+        self.current_variable = current_variable
+
+    def compose(self):
+
+        with Vertical(id="dialog"):
+
+            yield Static(
+                "WATCH VARIABLE",
+                id="title"
+            )
+
+            yield Input(
+                value=self.current_variable,
+                placeholder="Enter variable name...",
+                id="watch_name"
+            )
+
+            with Horizontal(id="buttons"):
+
+                yield Button(
+                    "OK",
+                    variant="success",
+                    id="ok"
+                )
+
+                yield Button(
+                    "Cancel",
+                    variant="error",
+                    id="cancel"
+                )
+
+    def on_mount(self):
+
+        self.query_one(
+            "#watch_name",
+            Input
+        ).focus()
+
+    def on_button_pressed(self, event):
+
+        if event.button.id == "ok":
+
+            variable_name = self.query_one(
+                "#watch_name",
+                Input
+            ).value.strip()
+
+            if variable_name:
+
+                self.dismiss(variable_name)
+
+            return
+
+        if event.button.id == "cancel":
+
+            self.dismiss(None)
+
+
+# -------------------------------------------------
+# MAIN APPLICATION
+# -------------------------------------------------
+
 class PyChronicleApp(App):
 
     CSS = """
@@ -108,8 +212,13 @@ class PyChronicleApp(App):
         padding: 1;
     }
 
+    #watch_button {
+        margin-top: 1;
+        margin-bottom: 1;
+    }
+
     #timeline {
-        height: 12;
+        height: 14;
         border: solid yellow;
         padding: 1;
     }
@@ -118,11 +227,11 @@ class PyChronicleApp(App):
     BINDINGS = [
         ("left", "previous_step", "Previous"),
         ("right", "next_step", "Next"),
-        ("w", "toggle_watch", "Watch"),
+        ("w", "open_watch", "Watch"),
         ("q", "quit_app", "Quit"),
     ]
 
-    def compose(self) -> ComposeResult:
+    def compose(self):
 
         run = get_latest_run()
 
@@ -145,8 +254,11 @@ class PyChronicleApp(App):
             )
 
             if events:
+
                 self.current_step = events[-1][0]
+
             else:
+
                 self.current_step = 0
 
         yield Header(show_clock=True)
@@ -166,6 +278,11 @@ class PyChronicleApp(App):
 
                 yield Static("VARIABLES")
 
+                yield Button(
+                    "🔍 Watch Variable",
+                    id="watch_button"
+                )
+
                 yield Static(
                     "",
                     id="variable_state"
@@ -184,6 +301,10 @@ class PyChronicleApp(App):
             return
 
         self.update_display()
+
+    # -------------------------------------------------
+    # CODE VIEW
+    # -------------------------------------------------
 
     def update_code(self):
 
@@ -228,6 +349,10 @@ class PyChronicleApp(App):
             Static
         ).update(code_text)
 
+    # -------------------------------------------------
+    # VARIABLES
+    # -------------------------------------------------
+
     def update_variables(self):
 
         state = get_state_at_step(
@@ -237,10 +362,14 @@ class PyChronicleApp(App):
 
         if self.watch_enabled:
 
+            value = state.get(
+                self.watched_variable,
+                "Not defined"
+            )
+
             variables_text = (
                 "WATCHED VARIABLE\n\n"
-                f"{self.watched_variable} = "
-                f"{state.get(self.watched_variable, 'Not defined')}"
+                f"{self.watched_variable} = {value}"
             )
 
         else:
@@ -260,12 +389,18 @@ class PyChronicleApp(App):
 
             else:
 
-                variables_text += "No variables yet."
+                variables_text += (
+                    "No variables yet."
+                )
 
         self.query_one(
             "#variable_state",
             Static
         ).update(variables_text)
+
+    # -------------------------------------------------
+    # TIMELINE
+    # -------------------------------------------------
 
     def update_timeline(self):
 
@@ -286,6 +421,7 @@ class PyChronicleApp(App):
         for step, variable, value in changes:
 
             if step not in changes_by_step:
+
                 changes_by_step[step] = []
 
             changes_by_step[step].append(
@@ -321,11 +457,14 @@ class PyChronicleApp(App):
                     )
 
                     if step == self.current_step:
+
                         timeline_text += (
                             f"▶ [{step}] "
                             f"{event_text}\n"
                         )
+
                     else:
+
                         timeline_text += (
                             f"  {step}  "
                             f"{event_text}\n"
@@ -339,11 +478,14 @@ class PyChronicleApp(App):
                 )
 
                 if step == self.current_step:
+
                     timeline_text += (
                         f"▶ [{step}] "
                         f"{event_text}\n"
                     )
+
                 else:
+
                     timeline_text += (
                         f"  {step}  "
                         f"{event_text}\n"
@@ -353,6 +495,10 @@ class PyChronicleApp(App):
             "#timeline",
             Static
         ).update(timeline_text)
+
+    # -------------------------------------------------
+    # DISPLAY
+    # -------------------------------------------------
 
     def update_display(self):
 
@@ -367,11 +513,16 @@ class PyChronicleApp(App):
         self.update_timeline()
         self.update_code()
 
+    # -------------------------------------------------
+    # STEP CONTROLS
+    # -------------------------------------------------
+
     def action_previous_step(self):
 
         if self.current_step > 1:
 
             self.current_step -= 1
+
             self.update_display()
 
     def action_next_step(self):
@@ -388,13 +539,43 @@ class PyChronicleApp(App):
         if self.current_step < last_step:
 
             self.current_step += 1
+
             self.update_display()
 
-    def action_toggle_watch(self):
+    # -------------------------------------------------
+    # WATCH
+    # -------------------------------------------------
 
-        self.watch_enabled = not self.watch_enabled
+    def action_open_watch(self):
 
-        self.update_display()
+        self.push_screen(
+            WatchVariableModal(
+                self.watched_variable
+            ),
+            self.watch_variable_result
+        )
+
+    def watch_variable_result(self, variable_name):
+
+        if variable_name:
+
+            self.watched_variable = variable_name
+
+            self.watch_enabled = True
+
+            self.update_display()
+
+        self.set_focus(None)
+
+    def on_button_pressed(self, event):
+
+        if event.button.id == "watch_button":
+
+            self.action_open_watch()
+
+    # -------------------------------------------------
+    # QUIT
+    # -------------------------------------------------
 
     def action_quit_app(self):
 
